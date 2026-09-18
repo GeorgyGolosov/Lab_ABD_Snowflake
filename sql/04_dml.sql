@@ -1,78 +1,230 @@
-TRUNCATE fact_sales, dim_customer, dim_seller, dim_product, dim_store, dim_supplier, dim_city, dim_country, dim_category CASCADE;
+TRUNCATE TABLE
+    fact_sales,
+    dim_customer,
+    dim_seller,
+    dim_product,
+    dim_store,
+    dim_supplier,
+    dim_city,
+    dim_country,
+    dim_category
+RESTART IDENTITY CASCADE;
 
--- 1. dim_country
+-- 1. Страны из всех четырёх групп исходных полей.
 INSERT INTO dim_country (name)
-SELECT DISTINCT TRIM(customer_country) FROM raw_data WHERE customer_country IS NOT NULL AND TRIM(customer_country) != ''
-UNION
-SELECT DISTINCT TRIM(seller_country) FROM raw_data WHERE seller_country IS NOT NULL AND TRIM(seller_country) != ''
-UNION
-SELECT DISTINCT TRIM(store_country) FROM raw_data WHERE store_country IS NOT NULL AND TRIM(store_country) != ''
-UNION
-SELECT DISTINCT TRIM(supplier_country) FROM raw_data WHERE supplier_country IS NOT NULL AND TRIM(supplier_country) != ''
-ON CONFLICT (name) DO NOTHING;
+SELECT country
+FROM (
+    SELECT NULLIF(BTRIM(customer_country), '') AS country FROM raw_data
+    UNION
+    SELECT NULLIF(BTRIM(seller_country), '') FROM raw_data
+    UNION
+    SELECT NULLIF(BTRIM(store_country), '') FROM raw_data
+    UNION
+    SELECT NULLIF(BTRIM(supplier_country), '') FROM raw_data
+) AS countries
+WHERE country IS NOT NULL;
 
--- 2. dim_city
+-- 2. Города магазинов и поставщиков
 INSERT INTO dim_city (name, state, country_id)
-SELECT DISTINCT COALESCE(NULLIF(TRIM(store_city), ''), '(unknown)'), COALESCE(NULLIF(TRIM(store_state), ''), '(unknown)'), co.country_id
-FROM raw_data r JOIN dim_country co ON COALESCE(NULLIF(TRIM(r.store_country), ''), '(unknown)') = co.name
-WHERE r.store_city IS NOT NULL AND TRIM(r.store_city) != ''
-UNION
-SELECT DISTINCT COALESCE(NULLIF(TRIM(supplier_city), ''), '(unknown)'), '(unknown)', co.country_id
-FROM raw_data r JOIN dim_country co ON COALESCE(NULLIF(TRIM(r.supplier_country), ''), '(unknown)') = co.name
-WHERE r.supplier_city IS NOT NULL AND TRIM(r.supplier_city) != ''
-ON CONFLICT (name, state, country_id) DO NOTHING;
+SELECT source.name, source.state, country.country_id
+FROM (
+    SELECT DISTINCT
+        BTRIM(store_city) AS name,
+        COALESCE(NULLIF(BTRIM(store_state), ''), '(unknown)') AS state,
+        BTRIM(store_country) AS country_name
+    FROM raw_data
+    WHERE NULLIF(BTRIM(store_city), '') IS NOT NULL
+      AND NULLIF(BTRIM(store_country), '') IS NOT NULL
 
--- 3. dim_category
+    UNION
+
+    SELECT DISTINCT
+        BTRIM(supplier_city),
+        '(unknown)',
+        BTRIM(supplier_country)
+    FROM raw_data
+    WHERE NULLIF(BTRIM(supplier_city), '') IS NOT NULL
+      AND NULLIF(BTRIM(supplier_country), '') IS NOT NULL
+) AS source
+JOIN dim_country AS country ON country.name = source.country_name;
+
+-- 3. Категории товаров.
 INSERT INTO dim_category (name)
-SELECT DISTINCT TRIM(product_category) FROM raw_data WHERE product_category IS NOT NULL AND TRIM(product_category) != '';
+SELECT DISTINCT BTRIM(product_category)
+FROM raw_data
+WHERE NULLIF(BTRIM(product_category), '') IS NOT NULL;
 
--- 4. dim_customer
-INSERT INTO dim_customer
-SELECT DISTINCT ON (TRIM(r.id)::INTEGER)
-    TRIM(r.id)::INTEGER, NULLIF(TRIM(r.customer_first_name), ''), NULLIF(TRIM(r.customer_last_name), ''), NULLIF(TRIM(r.customer_age), '')::INTEGER, NULLIF(TRIM(r.customer_email), ''),
-    co.country_id, NULLIF(TRIM(r.customer_postal_code), ''), NULLIF(TRIM(r.customer_pet_type), ''), NULLIF(TRIM(r.customer_pet_name), ''), NULLIF(TRIM(r.customer_pet_breed), '')
-FROM raw_data r LEFT JOIN dim_country co ON TRIM(r.customer_country) = co.name
-WHERE r.id IS NOT NULL AND TRIM(r.id) != '' ORDER BY TRIM(r.id)::INTEGER;
-
--- 5. dim_seller
-INSERT INTO dim_seller
-SELECT DISTINCT ON (TRIM(r.id)::INTEGER)
-    TRIM(r.id)::INTEGER, NULLIF(TRIM(r.seller_first_name), ''), NULLIF(TRIM(r.seller_last_name), ''), NULLIF(TRIM(r.seller_email), ''), co.country_id, NULLIF(TRIM(r.seller_postal_code), '')
-FROM raw_data r LEFT JOIN dim_country co ON TRIM(r.seller_country) = co.name
-WHERE r.id IS NOT NULL AND TRIM(r.id) != '' ORDER BY TRIM(r.id)::INTEGER;
-
--- 6. dim_product
-INSERT INTO dim_product
-SELECT DISTINCT ON (TRIM(r.id)::INTEGER)
-    TRIM(r.id)::INTEGER, NULLIF(TRIM(r.product_name), ''), cat.category_id, NULLIF(TRIM(r.product_price), '')::DECIMAL(10,2), NULLIF(TRIM(r.product_quantity), '')::INTEGER,
-    NULLIF(TRIM(r.pet_category), ''), NULLIF(TRIM(r.product_weight), ''), NULLIF(TRIM(r.product_color), ''), NULLIF(TRIM(r.product_size), ''), NULLIF(TRIM(r.product_material), ''), NULLIF(TRIM(r.product_description), ''),
-    NULLIF(TRIM(r.product_brand), ''), NULLIF(TRIM(r.product_reviews), '')::INTEGER, TO_DATE(NULLIF(TRIM(r.product_release_date), ''), 'MM/DD/YYYY'),
-    NULLIF(TRIM(r.product_rating), '')::DECIMAL(3,2), TO_DATE(NULLIF(TRIM(r.product_expiry_date), ''), 'MM/DD/YYYY')
-FROM raw_data r LEFT JOIN dim_category cat ON TRIM(r.product_category) = cat.name
-WHERE r.id IS NOT NULL AND TRIM(r.id) != '' ORDER BY TRIM(r.id)::INTEGER;
-
--- 7. dim_store
-INSERT INTO dim_store (store_id, name, location, city_id, phone, email)
-SELECT DISTINCT
-    (abs(hashtext(COALESCE(TRIM(store_name), '') || '|' || COALESCE(TRIM(store_location), '') || '|' || COALESCE(TRIM(store_city), '') || '|' || COALESCE(TRIM(store_state), '') || '|' || COALESCE(TRIM(store_country), '') || '|' || COALESCE(TRIM(store_phone), '') || '|' || COALESCE(TRIM(store_email), ''))) % 2147483647) AS store_id,
-    NULLIF(TRIM(store_name), ''), NULLIF(TRIM(store_location), ''), dc.city_id, NULLIF(TRIM(store_phone), ''), NULLIF(TRIM(store_email), '')
-FROM raw_data r LEFT JOIN dim_city dc ON COALESCE(NULLIF(TRIM(r.store_city), ''), '(unknown)') = dc.name AND COALESCE(NULLIF(TRIM(r.store_state), ''), '(unknown)') = dc.state
-WHERE r.store_name IS NOT NULL AND TRIM(r.store_name) != '';
-
--- 8. dim_supplier
-INSERT INTO dim_supplier (supplier_id, name, contact, email, phone, address, city_id)
-SELECT DISTINCT
-    (abs(hashtext(COALESCE(TRIM(supplier_name), '') || '|' || COALESCE(TRIM(supplier_contact), '') || '|' || COALESCE(TRIM(supplier_email), '') || '|' || COALESCE(TRIM(supplier_phone), '') || '|' || COALESCE(TRIM(supplier_address), '') || '|' || COALESCE(TRIM(supplier_city), '') || '|' || COALESCE(TRIM(supplier_country), ''))) % 2147483647) AS supplier_id,
-    NULLIF(TRIM(supplier_name), ''), NULLIF(TRIM(supplier_contact), ''), NULLIF(TRIM(supplier_email), ''), NULLIF(TRIM(supplier_phone), ''), NULLIF(TRIM(supplier_address), ''), dc.city_id
-FROM raw_data r LEFT JOIN dim_city dc ON COALESCE(NULLIF(TRIM(r.supplier_city), ''), '(unknown)') = dc.name
-WHERE r.supplier_name IS NOT NULL AND TRIM(r.supplier_name) != '';
-
--- 9. fact_sales
-INSERT INTO fact_sales
+-- Локальные ID 1..1000 повторяются в 10 файлах. Формула file_id * 1000 + id
+-- создаёт ключи 1..10000 и сохраняет все сущности.
+-- 4. Клиенты.
+INSERT INTO dim_customer (
+    customer_id, first_name, last_name, age, email, country_id,
+    postal_code, pet_type, pet_name, pet_breed
+)
 SELECT
-    (r.file_id * 1000) + TRIM(r.id)::INTEGER AS sale_id,
-    TRIM(r.sale_customer_id)::INTEGER, TRIM(r.sale_seller_id)::INTEGER, TRIM(r.sale_product_id)::INTEGER,
-    (abs(hashtext(COALESCE(TRIM(store_name), '') || '|' || COALESCE(TRIM(store_location), '') || '|' || COALESCE(TRIM(store_city), '') || '|' || COALESCE(TRIM(store_state), '') || '|' || COALESCE(TRIM(store_country), '') || '|' || COALESCE(TRIM(store_phone), '') || '|' || COALESCE(TRIM(store_email), ''))) % 2147483647),
-    (abs(hashtext(COALESCE(TRIM(supplier_name), '') || '|' || COALESCE(TRIM(supplier_contact), '') || '|' || COALESCE(TRIM(supplier_email), '') || '|' || COALESCE(TRIM(supplier_phone), '') || '|' || COALESCE(TRIM(supplier_address), '') || '|' || COALESCE(TRIM(supplier_city), '') || '|' || COALESCE(TRIM(supplier_country), ''))) % 2147483647),
-    TO_DATE(NULLIF(TRIM(r.sale_date), ''), 'MM/DD/YYYY'), NULLIF(TRIM(r.sale_quantity), '')::INTEGER, NULLIF(TRIM(r.sale_total_price), '')::DECIMAL(10,2)
-FROM raw_data r WHERE r.id IS NOT NULL AND TRIM(r.id) != '';
+    (r.file_id * 1000) + BTRIM(r.sale_customer_id)::INTEGER,
+    NULLIF(BTRIM(r.customer_first_name), ''),
+    NULLIF(BTRIM(r.customer_last_name), ''),
+    NULLIF(BTRIM(r.customer_age), '')::INTEGER,
+    BTRIM(r.customer_email),
+    country.country_id,
+    NULLIF(BTRIM(r.customer_postal_code), ''),
+    NULLIF(BTRIM(r.customer_pet_type), ''),
+    NULLIF(BTRIM(r.customer_pet_name), ''),
+    NULLIF(BTRIM(r.customer_pet_breed), '')
+FROM raw_data AS r
+JOIN dim_country AS country ON country.name = BTRIM(r.customer_country);
+
+-- 5. Продавцы.
+INSERT INTO dim_seller (
+    seller_id, first_name, last_name, email, country_id, postal_code
+)
+SELECT
+    (r.file_id * 1000) + BTRIM(r.sale_seller_id)::INTEGER,
+    NULLIF(BTRIM(r.seller_first_name), ''),
+    NULLIF(BTRIM(r.seller_last_name), ''),
+    BTRIM(r.seller_email),
+    country.country_id,
+    NULLIF(BTRIM(r.seller_postal_code), '')
+FROM raw_data AS r
+JOIN dim_country AS country ON country.name = BTRIM(r.seller_country);
+
+-- 6. Товары.
+INSERT INTO dim_product (
+    product_id, name, category_id, price, quantity, pet_category, weight,
+    color, size, brand, material, description, rating, reviews,
+    release_date, expiry_date
+)
+SELECT
+    (r.file_id * 1000) + BTRIM(r.sale_product_id)::INTEGER,
+    BTRIM(r.product_name),
+    category.category_id,
+    NULLIF(BTRIM(r.product_price), '')::DECIMAL(10,2),
+    NULLIF(BTRIM(r.product_quantity), '')::INTEGER,
+    NULLIF(BTRIM(r.pet_category), ''),
+    NULLIF(BTRIM(r.product_weight), '')::DECIMAL(10,2),
+    NULLIF(BTRIM(r.product_color), ''),
+    NULLIF(BTRIM(r.product_size), ''),
+    NULLIF(BTRIM(r.product_brand), ''),
+    NULLIF(BTRIM(r.product_material), ''),
+    NULLIF(BTRIM(r.product_description), ''),
+    NULLIF(BTRIM(r.product_rating), '')::DECIMAL(3,2),
+    NULLIF(BTRIM(r.product_reviews), '')::INTEGER,
+    TO_DATE(NULLIF(BTRIM(r.product_release_date), ''), 'MM/DD/YYYY'),
+    TO_DATE(NULLIF(BTRIM(r.product_expiry_date), ''), 'MM/DD/YYYY')
+FROM raw_data AS r
+JOIN dim_category AS category ON category.name = BTRIM(r.product_category);
+
+-- 7. Магазины. Хеш строится по полной комбинации исходных атрибутов.
+WITH store_source AS (
+    SELECT DISTINCT
+        BTRIM(store_name) AS name,
+        COALESCE(NULLIF(BTRIM(store_location), ''), '') AS location_key,
+        BTRIM(store_city) AS city_name,
+        COALESCE(NULLIF(BTRIM(store_state), ''), '(unknown)') AS state_name,
+        BTRIM(store_country) AS country_name,
+        COALESCE(NULLIF(BTRIM(store_phone), ''), '') AS phone_key,
+        COALESCE(NULLIF(BTRIM(store_email), ''), '') AS email_key
+    FROM raw_data
+)
+INSERT INTO dim_store (store_id, name, location, city_id, phone, email)
+SELECT
+    MOD(ABS(HASHTEXT(CONCAT_WS('|',
+        source.name, source.location_key, source.city_name, source.state_name,
+        source.country_name, source.phone_key, source.email_key
+    ))::BIGINT), 2147483647)::INTEGER,
+    source.name,
+    NULLIF(source.location_key, ''),
+    city.city_id,
+    NULLIF(source.phone_key, ''),
+    NULLIF(source.email_key, '')
+FROM store_source AS source
+JOIN dim_country AS country ON country.name = source.country_name
+JOIN dim_city AS city
+  ON city.name = source.city_name
+ AND city.state = source.state_name
+ AND city.country_id = country.country_id;
+
+-- 8. Поставщики.
+WITH supplier_source AS (
+    SELECT DISTINCT
+        BTRIM(supplier_name) AS name,
+        COALESCE(NULLIF(BTRIM(supplier_contact), ''), '') AS contact_key,
+        COALESCE(NULLIF(BTRIM(supplier_email), ''), '') AS email_key,
+        COALESCE(NULLIF(BTRIM(supplier_phone), ''), '') AS phone_key,
+        COALESCE(NULLIF(BTRIM(supplier_address), ''), '') AS address_key,
+        BTRIM(supplier_city) AS city_name,
+        BTRIM(supplier_country) AS country_name
+    FROM raw_data
+)
+INSERT INTO dim_supplier (
+    supplier_id, name, contact, email, phone, address, city_id
+)
+SELECT
+    MOD(ABS(HASHTEXT(CONCAT_WS('|',
+        source.name, source.contact_key, source.email_key, source.phone_key,
+        source.address_key, source.city_name, source.country_name
+    ))::BIGINT), 2147483647)::INTEGER,
+    source.name,
+    NULLIF(source.contact_key, ''),
+    NULLIF(source.email_key, ''),
+    NULLIF(source.phone_key, ''),
+    NULLIF(source.address_key, ''),
+    city.city_id
+FROM supplier_source AS source
+JOIN dim_country AS country ON country.name = source.country_name
+JOIN dim_city AS city
+  ON city.name = source.city_name
+ AND city.state = '(unknown)'
+ AND city.country_id = country.country_id;
+
+-- 9. Факты. JOIN со всеми измерениями одновременно проверяет соответствия.
+WITH sales_source AS (
+    SELECT
+        (r.file_id * 1000) + BTRIM(r.id)::INTEGER AS sale_id,
+        (r.file_id * 1000) + BTRIM(r.sale_customer_id)::INTEGER AS customer_id,
+        (r.file_id * 1000) + BTRIM(r.sale_seller_id)::INTEGER AS seller_id,
+        (r.file_id * 1000) + BTRIM(r.sale_product_id)::INTEGER AS product_id,
+        MOD(ABS(HASHTEXT(CONCAT_WS('|',
+            BTRIM(r.store_name),
+            COALESCE(NULLIF(BTRIM(r.store_location), ''), ''),
+            BTRIM(r.store_city),
+            COALESCE(NULLIF(BTRIM(r.store_state), ''), '(unknown)'),
+            BTRIM(r.store_country),
+            COALESCE(NULLIF(BTRIM(r.store_phone), ''), ''),
+            COALESCE(NULLIF(BTRIM(r.store_email), ''), '')
+        ))::BIGINT), 2147483647)::INTEGER AS store_id,
+        MOD(ABS(HASHTEXT(CONCAT_WS('|',
+            BTRIM(r.supplier_name),
+            COALESCE(NULLIF(BTRIM(r.supplier_contact), ''), ''),
+            COALESCE(NULLIF(BTRIM(r.supplier_email), ''), ''),
+            COALESCE(NULLIF(BTRIM(r.supplier_phone), ''), ''),
+            COALESCE(NULLIF(BTRIM(r.supplier_address), ''), ''),
+            BTRIM(r.supplier_city),
+            BTRIM(r.supplier_country)
+        ))::BIGINT), 2147483647)::INTEGER AS supplier_id,
+        TO_DATE(NULLIF(BTRIM(r.sale_date), ''), 'MM/DD/YYYY') AS sale_date,
+        NULLIF(BTRIM(r.sale_quantity), '')::INTEGER AS quantity,
+        NULLIF(BTRIM(r.sale_total_price), '')::DECIMAL(10,2) AS total_price
+    FROM raw_data AS r
+)
+INSERT INTO fact_sales (
+    sale_id, customer_id, seller_id, product_id, store_id, supplier_id,
+    sale_date, quantity, total_price
+)
+SELECT
+    source.sale_id,
+    customer.customer_id,
+    seller.seller_id,
+    product.product_id,
+    store.store_id,
+    supplier.supplier_id,
+    source.sale_date,
+    source.quantity,
+    source.total_price
+FROM sales_source AS source
+JOIN dim_customer AS customer ON customer.customer_id = source.customer_id
+JOIN dim_seller AS seller ON seller.seller_id = source.seller_id
+JOIN dim_product AS product ON product.product_id = source.product_id
+JOIN dim_store AS store ON store.store_id = source.store_id
+JOIN dim_supplier AS supplier ON supplier.supplier_id = source.supplier_id;

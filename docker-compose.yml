@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    container_name: bdsnowflake-postgres
     environment:
       POSTGRES_DB: petstore
       POSTGRES_USER: postgres
@@ -9,12 +10,14 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./исходные данные:/data
+      - "./исходные данные:/data:ro"
+      - "./sql:/docker-entrypoint-initdb.d:ro"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d petstore"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
 
 volumes:
   pgdata:

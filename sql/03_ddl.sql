@@ -1,146 +1,100 @@
-CREATE TABLE IF NOT EXISTS raw_data (
-    file_id INTEGER,
-    id TEXT,
-    customer_last_name TEXT,
-    customer_first_name TEXT,
-    customer_age TEXT,
-    customer_email TEXT,
-    customer_postal_code TEXT,
-    customer_country TEXT,
-    customer_pet_type TEXT,
-    customer_pet_name TEXT,
-    customer_pet_breed TEXT,
-    seller_first_name TEXT,
-    seller_last_name TEXT,
-    seller_email TEXT,
-    seller_country TEXT,
-    seller_postal_code TEXT,
-    product_name TEXT,
-    product_category TEXT,
-    product_price TEXT,
-    product_quantity TEXT,
-    pet_category TEXT,
-    product_weight TEXT,
-    product_color TEXT,
-    product_size TEXT,
-    product_material TEXT,
-    product_description TEXT,
-    product_brand TEXT,
-    product_reviews TEXT,
-    product_release_date TEXT,
-    product_rating TEXT,
-    product_expiry_date TEXT,
-    sale_date TEXT,
-    sale_customer_id TEXT,
-    sale_seller_id TEXT,
-    sale_product_id TEXT,
-    sale_quantity TEXT,
-    sale_total_price TEXT,
-    store_name TEXT,
-    store_location TEXT,
-    store_city TEXT,
-    store_state TEXT,
-    store_country TEXT,
-    store_phone TEXT,
-    store_email TEXT,
-    supplier_name TEXT,
-    supplier_contact TEXT,
-    supplier_email TEXT,
-    supplier_phone TEXT,
-    supplier_address TEXT,
-    supplier_city TEXT,
-    supplier_country TEXT
-);
-
--- 1. Справочники
-CREATE TABLE dim_country (
+-- Справочники: верхний уровень схемы «снежинка».
+CREATE TABLE IF NOT EXISTS dim_country (
     country_id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL
 );
 
-CREATE TABLE dim_city (
+CREATE TABLE IF NOT EXISTS dim_city (
     city_id SERIAL PRIMARY KEY,
-    name VARCHAR(100),
-    state VARCHAR(100),
-    country_id INTEGER REFERENCES dim_country(country_id),
+    name VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,
+    country_id INTEGER NOT NULL REFERENCES dim_country(country_id),
     UNIQUE (name, state, country_id)
 );
 
-CREATE TABLE dim_category (
+CREATE TABLE IF NOT EXISTS dim_category (
     category_id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL
 );
 
--- 2. Измерения
-CREATE TABLE dim_customer (
+-- Измерения. У customer/seller/product локальные CSV-ID дополняются file_id
+-- при загрузке, потому что диапазон 1..1000 повторяется в каждом файле.
+CREATE TABLE IF NOT EXISTS dim_customer (
     customer_id INTEGER PRIMARY KEY,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
     age INTEGER,
-    email VARCHAR(200),
-    country_id INTEGER REFERENCES dim_country(country_id),
+    email VARCHAR(200) NOT NULL,
+    country_id INTEGER NOT NULL REFERENCES dim_country(country_id),
     postal_code VARCHAR(20),
     pet_type VARCHAR(50),
     pet_name VARCHAR(100),
     pet_breed VARCHAR(100)
 );
 
-CREATE TABLE dim_seller (
+CREATE TABLE IF NOT EXISTS dim_seller (
     seller_id INTEGER PRIMARY KEY,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
-    email VARCHAR(200),
-    country_id INTEGER REFERENCES dim_country(country_id),
+    email VARCHAR(200) NOT NULL,
+    country_id INTEGER NOT NULL REFERENCES dim_country(country_id),
     postal_code VARCHAR(20)
 );
 
-CREATE TABLE dim_product (
+CREATE TABLE IF NOT EXISTS dim_product (
     product_id INTEGER PRIMARY KEY,
-    name TEXT,
-    category_id INTEGER REFERENCES dim_category(category_id),
+    name VARCHAR(200) NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES dim_category(category_id),
     price DECIMAL(10,2),
     quantity INTEGER,
     pet_category VARCHAR(100),
-    weight VARCHAR(50),
+    weight DECIMAL(10,2),
     color VARCHAR(50),
     size VARCHAR(50),
+    brand VARCHAR(100),
     material VARCHAR(100),
     description TEXT,
-    brand VARCHAR(100),
+    rating DECIMAL(3,2),
     reviews INTEGER,
     release_date DATE,
-    rating DECIMAL(3,2),
     expiry_date DATE
 );
 
-CREATE TABLE dim_store (
+CREATE TABLE IF NOT EXISTS dim_store (
     store_id INTEGER PRIMARY KEY,
-    name VARCHAR(200),
+    name VARCHAR(200) NOT NULL,
     location VARCHAR(200),
-    city_id INTEGER REFERENCES dim_city(city_id),
+    city_id INTEGER NOT NULL REFERENCES dim_city(city_id),
     phone VARCHAR(50),
     email VARCHAR(200)
 );
 
-CREATE TABLE dim_supplier (
+CREATE TABLE IF NOT EXISTS dim_supplier (
     supplier_id INTEGER PRIMARY KEY,
-    name VARCHAR(200),
+    name VARCHAR(200) NOT NULL,
     contact VARCHAR(200),
     email VARCHAR(200),
     phone VARCHAR(50),
     address VARCHAR(200),
-    city_id INTEGER REFERENCES dim_city(city_id)
+    city_id INTEGER NOT NULL REFERENCES dim_city(city_id)
 );
 
--- 3. Таблица фактов
-CREATE TABLE fact_sales (
+-- Центральная таблица фактов.
+CREATE TABLE IF NOT EXISTS fact_sales (
     sale_id INTEGER PRIMARY KEY,
-    customer_id INTEGER REFERENCES dim_customer(customer_id),
-    seller_id INTEGER REFERENCES dim_seller(seller_id),
-    product_id INTEGER REFERENCES dim_product(product_id),
-    store_id INTEGER REFERENCES dim_store(store_id),
-    supplier_id INTEGER REFERENCES dim_supplier(supplier_id),
-    sale_date DATE,
-    quantity INTEGER,
-    total_price DECIMAL(10,2)
+    customer_id INTEGER NOT NULL REFERENCES dim_customer(customer_id),
+    seller_id INTEGER NOT NULL REFERENCES dim_seller(seller_id),
+    product_id INTEGER NOT NULL REFERENCES dim_product(product_id),
+    store_id INTEGER NOT NULL REFERENCES dim_store(store_id),
+    supplier_id INTEGER NOT NULL REFERENCES dim_supplier(supplier_id),
+    sale_date DATE NOT NULL,
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    total_price DECIMAL(10,2) NOT NULL CHECK (total_price >= 0)
 );
+
+CREATE INDEX IF NOT EXISTS idx_fact_sales_customer_id ON fact_sales(customer_id);
+CREATE INDEX IF NOT EXISTS idx_fact_sales_seller_id ON fact_sales(seller_id);
+CREATE INDEX IF NOT EXISTS idx_fact_sales_product_id ON fact_sales(product_id);
+CREATE INDEX IF NOT EXISTS idx_fact_sales_store_id ON fact_sales(store_id);
+CREATE INDEX IF NOT EXISTS idx_fact_sales_supplier_id ON fact_sales(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_fact_sales_sale_date ON fact_sales(sale_date);
